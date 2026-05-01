@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wumpus World</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: white;
+    }
+
+    h2 { color: #333; }
+
+    input { width: 40px; padding: 3px; }
+    button {
+      padding: 6px 14px;
+      margin: 3px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    table {
+      border-collapse: collapse;
+      margin: 15px 0;
+    }
+
+    td {
+      width: 70px;
+      height: 70px;
+      border: 2px solid black;
+      text-align: center;
+      vertical-align: middle;
+      font-size: 12px;
+    }
+
+    /* Cell types - just simple background colors */
+    .unknown  { background: #eee; }
+    .visited  { background: #add8e6; }   /* light blue */
+    .agent    { background: yellow; }
+    .safe     { background: #90ee90; }   /* light green */
+    .pit      { background: #ff6666; }   /* red */
+    .wumpus   { background: #ffaa66; }   /* orange */
+
+    #info {
+      background: #f5f5f5;
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+
+    #log {
+      background: #f9f9f9;
+      border: 1px solid #ccc;
+      padding: 8px;
+      height: 150px;
+      overflow-y: auto;
+      font-size: 12px;
+      font-family: monospace;
+      margin: 10px 0;
+    }
+
+    .label { font-weight: bold; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<h2>Wumpus World - Logic Agent</h2>
+
+<!-- Settings -->
+<div>
+  <label>Rows: <input id="rows" type="number" value="4" min="3" max="6"></label>
+  &nbsp;
+  <label>Cols: <input id="cols" type="number" value="4" min="3" max="6"></label>
+  &nbsp;
+  <label>Pits: <input id="pits" type="number" value="2" min="1" max="4"></label>
+  &nbsp;
+  <button onclick="startGame()">Start</button>
+</div>
+
+<br>
+
+<!-- Control buttons -->
+<div id="controls" style="display:none">
+  <button onclick="doStep()">Step</button>
+  <button onclick="toggleAuto()">Auto</button>
+  <button onclick="startGame()">Restart</button>
+</div>
+
+<!-- Grid shown here -->
+<div id="grid"></div>
+
+<!-- Info box -->
+<div id="info" style="display:none">
+  <div><b>Status:</b> <span id="status">-</span></div>
+  <div><b>Position:</b> <span id="pos">-</span></div>
+  <div><b>Percepts:</b> <span id="percepts">-</span></div>
+  <div><b>Steps:</b> <span id="steps">0</span> &nbsp;|&nbsp;
+       <b>Inferences:</b> <span id="inf">0</span> &nbsp;|&nbsp;
+       <b>KB size:</b> <span id="kbsize">0</span></div>
+</div>
+
+<!-- Log -->
+<div class="label" id="log-label" style="display:none">Log:</div>
+<div id="log" style="display:none"></div>
+
+<!-- Legend -->
+<div id="legend" style="display:none">
+  <b>Legend:</b>
+  <span style="background:yellow;padding:2px 8px;border:1px solid #999">Agent</span>
+  <span style="background:#add8e6;padding:2px 8px;border:1px solid #999">Visited</span>
+  <span style="background:#90ee90;padding:2px 8px;border:1px solid #999">Safe</span>
+  <span style="background:#eee;padding:2px 8px;border:1px solid #999">Unknown</span>
+  <span style="background:#ff6666;padding:2px 8px;border:1px solid #999">Pit</span>
+  <span style="background:#ffaa66;padding:2px 8px;border:1px solid #999">Wumpus</span>
+</div>
