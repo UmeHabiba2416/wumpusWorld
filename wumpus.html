@@ -116,3 +116,523 @@
   <span style="background:#ff6666;padding:2px 8px;border:1px solid #999">Pit</span>
   <span style="background:#ffaa66;padding:2px 8px;border:1px solid #999">Wumpus</span>
 </div>
+<script>
+
+// ============================================================
+// KNOWLEDGE BASE (KB)
+// Very simple: KB is just an array of clauses
+// Each clause is an array of strings
+// Example clause: ["-P_1_2", "B_0_1"]  means  (NOT P_1_2 OR B_0_1)
+// ============================================================
+
+var KB = [];
+var inferCount = 0;
+
+// Add one clause to KB
+function addClause(clause) {
+  KB.push(clause);
+}
+
+// Flip a literal: "P_1_2" -> "-P_1_2" and "-P_1_2" -> "P_1_2"
+function flip(lit) {
+  if (lit[0] === '-') return lit.slice(1);
+  return '-' + lit;
+}
+
+// RESOLUTION: try to prove that 'goal' literal is true
+// Method: add NOT goal to KB, try to get empty clause (contradiction)
+// If empty clause found -> goal is PROVED TRUE
+function prove(goal) {
+  // Make a copy of KB + add negation of goal
+  var clauses = [];
+  for (var i = 0; i < KB.length; i++) {
+    clauses.push(KB[i].slice()); // copy each clause
+  }
+  clauses.push([flip(goal)]); // add NOT goal
+
+  var changed = true;
+  var ops = 0;
+
+  while (changed && ops < 300) {
+    changed = false;
+
+    for (var i = 0; i < clauses.length; i++) {
+      for (var j = i + 1; j < clauses.length; j++) {
+        var A = clauses[i];
+        var B = clauses[j];
+
+        // Look for a literal in A whose opposite is in B
+        for (var k = 0; k < A.length; k++) {
+          var opposite = flip(A[k]);
+
+          if (B.indexOf(opposite) !== -1) {
+            ops++;
+            inferCount++;
+
+            // Build new clause: A + B - the pair
+            var newClause = [];
+            for (var x = 0; x < A.length; x++) {
+              if (A[x] !== A[k] && newClause.indexOf(A[x]) === -1)
+                newClause.push(A[x]);
+            }
+            for (var x = 0; x < B.length; x++) {
+              if (B[x] !== opposite && newClause.indexOf(B[x]) === -1)
+                newClause.push(B[x]);
+            }
+
+            // Empty clause = contradiction = PROVED!
+            if (newClause.length === 0) {
+              addLog('Proved: ' + goal);
+              return true;
+            }
+
+            // Add new clause if not already in list
+            var alreadyHave = false;
+            for (var y = 0; y < clauses.length; y++) {
+              if (clauses[y].length === newClause.length) {
+                var same = true;
+                for (var z = 0; z < newClause.length; z++) {
+                  if (clauses[y].indexOf(newClause[z]) === -1) { same = false; break; }
+                }
+                if (same) { alreadyHave = true; break; }
+              }
+            }
+            if (!alreadyHave) {
+              clauses.push(newClause);
+              changed = true;
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return false; // could not prove
+}
+
+// Check if cell (r,c) is safe = prove no pit AND no wumpus
+function checkSafe(r, c) {
+  var noPit    = prove('-P_' + r + '_' + c);
+  var noWumpus = prove('-W_' + r + '_' + c);
+  return noPit && noWumpus;
+}
+
+
+// ============================================================
+// GAME WORLD
+// ============================================================
+
+var R, C;           // grid size
+var grid = [];      // grid[r][c] = cell object
+var agR, agC;       // agent position
+var stepCount = 0;
+var gameOver = false;
+var autoTimer = null;
+var autoOn = false;
+
+function getNeighbors(r, c) {
+  var result = [];
+  if (r > 0)    result.push([r-1, c]);
+  if (r < R-1)  result.push([r+1, c]);
+  if (c > 0)    result.push([r, c-1]);
+  if (c < C-1)  result.push([r, c+1]);
+  return result;
+}
+
+function startGame() {
+  // Read settings
+  R = parseInt(document.getElementById('rows').value);
+  C = parseInt(document.getElementById('cols').value);
+  var numPits = parseInt(document.getElementById('pits').value);
+
+  R = Math.max(3, Math.min(6, R));
+  C = Math.max(3, Math.min(6, C));
+  numPits = Math.max(1, Math.min(4, numPits));
+
+  // Reset
+  KB = [];
+  inferCount = 0;
+  stepCount = 0;
+  gameOver = false;
+  if (autoTimer) clearInterval(autoTimer);
+  autoOn = false;
+
+  // Build empty grid
+  grid = [];
+  for (var r = 0; r < R; r++) {
+    grid[r] = [];
+    for (var c = 0; c < C; c++) {
+      grid[r][c] = {
+        pit: false,
+        wumpus: false,
+        gold: false,
+        visited: false,
+        safe: false,
+        breeze: false,
+        stench: false,
+        glitter: false
+      };
+    }
+  }
+
+  // Agent starts bottom-left
+  agR = R - 1;
+  agC = 0;
+
+  // Cells we cannot put hazards in (start + its neighbors)
+  var blocked = {};
+  blocked[agR + ',' + agC] = true;
+  getNeighbors(agR, agC).forEach(function(n) {
+    blocked[n[0] + ',' + n[1]] = true;
+  });
+
+  // All other cells are candidates
+  var pool = [];
+  for (var r = 0; r < R; r++)
+    for (var c = 0; c < C; c++)
+      if (!blocked[r + ',' + c])
+        pool.push([r, c]);
+
+  // Shuffle pool
+  for (var i = pool.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = pool[i]; pool[i] = pool[j]; pool[j] = t;
+  }
+
+  // Place wumpus at pool[0]
+  grid[pool[0][0]][pool[0][1]].wumpus = true;
+
+  // Place pits
+  for (var p = 1; p <= numPits && p < pool.length; p++) {
+    grid[pool[p][0]][pool[p][1]].pit = true;
+  }
+
+  // Place gold
+  var gi = Math.min(numPits + 1, pool.length - 1);
+  grid[pool[gi][0]][pool[gi][1]].gold = true;
+
+  // Compute breeze / stench / glitter for every cell
+  for (var r = 0; r < R; r++) {
+    for (var c = 0; c < C; c++) {
+      var ns = getNeighbors(r, c);
+      grid[r][c].breeze  = ns.some(function(n) { return grid[n[0]][n[1]].pit; });
+      grid[r][c].stench  = ns.some(function(n) { return grid[n[0]][n[1]].wumpus; });
+      grid[r][c].glitter = grid[r][c].gold;
+    }
+  }
+
+  // Tell KB: start cell is safe
+  addClause(['-P_' + agR + '_' + agC]);
+  addClause(['-W_' + agR + '_' + agC]);
+  grid[agR][agC].safe = true;
+
+  // Visit start
+  tellKB(agR, agC);
+
+  // Show controls and info
+  document.getElementById('controls').style.display = 'block';
+  document.getElementById('info').style.display = 'block';
+  document.getElementById('log').style.display = 'block';
+  document.getElementById('log-label').style.display = 'block';
+  document.getElementById('legend').style.display = 'block';
+  document.getElementById('log').innerHTML = '';
+
+  addLog('=== Game Started ===');
+  addLog('Grid: ' + R + 'x' + C + ', Pits: ' + numPits);
+  addLog('Agent at [' + agR + ',' + agC + ']');
+
+  drawGrid();
+  updateInfo();
+}
+
+
+// ============================================================
+// TELL KB: agent observes current cell and updates KB
+// ============================================================
+function tellKB(r, c) {
+  var cell = grid[r][c];
+  cell.visited = true;
+  cell.safe = true;
+
+  // This cell is definitely safe
+  addClause(['-P_' + r + '_' + c]);
+  addClause(['-W_' + r + '_' + c]);
+
+  var ns = getNeighbors(r, c);
+
+  if (cell.breeze) {
+    // At least one neighbor has a pit
+    // Clause: P_n1 OR P_n2 OR P_n3 ...
+    var pitClause = [];
+    ns.forEach(function(n) { pitClause.push('P_' + n[0] + '_' + n[1]); });
+    addClause(pitClause);
+    addLog('Breeze at [' + r + ',' + c + '] -> pit is near');
+  } else {
+    // No breeze -> NO pit in any neighbor
+    ns.forEach(function(n) {
+      addClause(['-P_' + n[0] + '_' + n[1]]);
+      grid[n[0]][n[1]].safe = true; // mark safe directly too
+    });
+    addLog('No breeze at [' + r + ',' + c + '] -> neighbors safe from pit');
+  }
+
+  if (cell.stench) {
+    // At least one neighbor has wumpus
+    var wClause = [];
+    ns.forEach(function(n) { wClause.push('W_' + n[0] + '_' + n[1]); });
+    addClause(wClause);
+    addLog('Stench at [' + r + ',' + c + '] -> wumpus is near');
+  } else {
+    // No stench -> NO wumpus in any neighbor
+    ns.forEach(function(n) {
+      addClause(['-W_' + n[0] + '_' + n[1]]);
+    });
+    addLog('No stench at [' + r + ',' + c + '] -> neighbors safe from wumpus');
+  }
+
+  if (cell.glitter) {
+    addLog('*** GLITTER! Gold is here at [' + r + ',' + c + '] ***');
+  }
+}
+
+
+// ============================================================
+// AGENT STEP: sense -> tell -> ask -> move
+// ============================================================
+function doStep() {
+  if (gameOver) return;
+
+  // Win check
+  if (grid[agR][agC].gold) {
+    setStatus('WON! Found gold at [' + agR + ',' + agC + ']');
+    gameOver = true;
+    if (autoTimer) clearInterval(autoTimer);
+    drawGrid();
+    return;
+  }
+
+  stepCount++;
+
+  var ns = getNeighbors(agR, agC);
+  var safeMoves = [];
+
+  // Check each unvisited neighbor
+  ns.forEach(function(n) {
+    var r = n[0], c = n[1];
+    if (grid[r][c].visited) return;
+
+    if (grid[r][c].safe) {
+      // Already known safe from tell step
+      safeMoves.push([r, c]);
+    } else {
+      // Ask KB using resolution
+      addLog('Asking KB: is [' + r + ',' + c + '] safe?');
+      var safe = checkSafe(r, c);
+      if (safe) {
+        grid[r][c].safe = true;
+        safeMoves.push([r, c]);
+        addLog('Resolution proved [' + r + ',' + c + '] is safe');
+      } else {
+        addLog('Cannot prove [' + r + ',' + c + '] is safe');
+      }
+    }
+  });
+
+  if (safeMoves.length > 0) {
+    // Move to first safe neighbor
+    moveTo(safeMoves[0][0], safeMoves[0][1]);
+  } else {
+    // No safe neighbor -> backtrack
+    // Find nearest safe unvisited cell via BFS and move one step toward it
+    var target = findSafeUnvisited();
+    if (target) {
+      var next = oneStepToward(agR, agC, target[0], target[1]);
+      if (next) {
+        moveTo(next[0], next[1]);
+      }
+    } else {
+      setStatus('All safe cells visited!');
+      gameOver = true;
+      if (autoTimer) clearInterval(autoTimer);
+    }
+  }
+
+  drawGrid();
+  updateInfo();
+}
+
+function moveTo(r, c) {
+  agR = r;
+  agC = c;
+
+  if (grid[r][c].pit) {
+    grid[r][c].visited = true;
+    setStatus('DEAD - fell into pit at [' + r + ',' + c + ']');
+    gameOver = true;
+    revealAll();
+    if (autoTimer) clearInterval(autoTimer);
+    return;
+  }
+  if (grid[r][c].wumpus) {
+    grid[r][c].visited = true;
+    setStatus('DEAD - eaten by wumpus at [' + r + ',' + c + ']');
+    gameOver = true;
+    revealAll();
+    if (autoTimer) clearInterval(autoTimer);
+    return;
+  }
+
+  tellKB(r, c);
+  setStatus('Moved to [' + r + ',' + c + ']');
+  addLog('--- Moved to [' + r + ',' + c + '] ---');
+}
+
+function revealAll() {
+  for (var r = 0; r < R; r++)
+    for (var c = 0; c < C; c++)
+      if (grid[r][c].pit || grid[r][c].wumpus)
+        grid[r][c].visited = true;
+}
+
+// BFS: find nearest safe unvisited cell
+function findSafeUnvisited() {
+  var seen = {};
+  var queue = [[agR, agC]];
+  seen[agR + ',' + agC] = true;
+  while (queue.length > 0) {
+    var cur = queue.shift();
+    var ns = getNeighbors(cur[0], cur[1]);
+    for (var i = 0; i < ns.length; i++) {
+      var r = ns[i][0], c = ns[i][1];
+      var key = r + ',' + c;
+      if (seen[key]) continue;
+      seen[key] = true;
+      if (grid[r][c].safe && !grid[r][c].visited) return [r, c];
+      if (grid[r][c].visited) queue.push([r, c]);
+    }
+  }
+  return null;
+}
+
+// BFS: return the first step from (fr,fc) toward (tr,tc)
+function oneStepToward(fr, fc, tr, tc) {
+  var seen = {};
+  var queue = [[fr, fc, null]]; // [row, col, first_step]
+  seen[fr + ',' + fc] = true;
+  while (queue.length > 0) {
+    var cur = queue.shift();
+    var r = cur[0], c = cur[1], first = cur[2];
+    var ns = getNeighbors(r, c);
+    for (var i = 0; i < ns.length; i++) {
+      var nr = ns[i][0], nc = ns[i][1];
+      var key = nr + ',' + nc;
+      if (seen[key]) continue;
+      seen[key] = true;
+      var step = first || [nr, nc];
+      if (nr === tr && nc === tc) return step;
+      if (grid[nr][nc].visited || grid[nr][nc].safe) queue.push([nr, nc, step]);
+    }
+  }
+  return null;
+}
+
+
+// ============================================================
+// AUTO RUN
+// ============================================================
+function toggleAuto() {
+  if (autoOn) {
+    clearInterval(autoTimer);
+    autoOn = false;
+  } else {
+    autoOn = true;
+    autoTimer = setInterval(function() {
+      if (gameOver) { clearInterval(autoTimer); autoOn = false; return; }
+      doStep();
+    }, 700);
+  }
+}
+
+
+// ============================================================
+// DRAW GRID - simple HTML table
+// ============================================================
+function drawGrid() {
+  var html = '<table>';
+  for (var r = 0; r < R; r++) {
+    html += '<tr>';
+    for (var c = 0; c < C; c++) {
+      var cell = grid[r][c];
+      var cls = 'unknown';
+      var text = '[' + r + ',' + c + ']<br>';
+
+      if (r === agR && c === agC) {
+        cls = 'agent';
+        text += 'AGENT';
+        // show percepts
+        var p = [];
+        if (cell.breeze)  p.push('Breeze');
+        if (cell.stench)  p.push('Stench');
+        if (cell.glitter) p.push('Gold!');
+        if (p.length > 0) text += '<br>' + p.join(', ');
+
+      } else if (cell.visited) {
+        if (cell.pit)    { cls = 'pit';    text += 'PIT'; }
+        else if (cell.wumpus) { cls = 'wumpus'; text += 'WUMPUS'; }
+        else {
+          cls = 'visited';
+          if (cell.gold) text += 'GOLD';
+          var p2 = [];
+          if (cell.breeze)  p2.push('B');
+          if (cell.stench)  p2.push('S');
+          if (p2.length > 0) text += '<br>' + p2.join(' ');
+        }
+
+      } else if (cell.safe) {
+        cls = 'safe';
+        text += 'SAFE';
+
+      } else {
+        text += '?';
+      }
+
+      html += '<td class="' + cls + '">' + text + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  document.getElementById('grid').innerHTML = html;
+}
+
+
+// ============================================================
+// INFO + LOG
+// ============================================================
+function updateInfo() {
+  document.getElementById('pos').textContent = '[' + agR + ',' + agC + ']';
+  document.getElementById('steps').textContent = stepCount;
+  document.getElementById('inf').textContent = inferCount;
+  document.getElementById('kbsize').textContent = KB.length;
+
+  var cell = grid[agR][agC];
+  var p = [];
+  if (cell.breeze)  p.push('Breeze');
+  if (cell.stench)  p.push('Stench');
+  if (cell.glitter) p.push('Glitter (Gold here!)');
+  document.getElementById('percepts').textContent = p.length > 0 ? p.join(', ') : 'None';
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function addLog(msg) {
+  var el = document.getElementById('log');
+  el.innerHTML += msg + '<br>';
+  el.scrollTop = el.scrollHeight;
+}
+
+</script>
+</body>
+</html>
